@@ -5,7 +5,7 @@ mod test_utils;
 #[cfg(target_os = "linux")]
 use headcrab::{
     symbol::{LocalValue, RelocatedDwarf},
-    target::UnixTarget,
+    target::{Registers, UnixTarget},
 };
 
 static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/hello");
@@ -30,22 +30,22 @@ fn read_locals() -> Result<(), Box<dyn std::error::Error>> {
     // Breakpoint
     test_utils::patch_breakpoint(&target, &debuginfo);
     target.unpause()?;
-    let ip = target.read_regs()?.rip;
+    let ip = target.read_regs()?.ip();
     assert_eq!(
         debuginfo.get_address_symbol_name(ip as usize).as_deref(),
         Some("breakpoint")
     );
 
     while debuginfo
-        .get_address_symbol_name(target.read_regs()?.rip as usize)
+        .get_address_symbol_name(target.read_regs()?.ip() as usize)
         .as_deref()
         == Some("breakpoint")
     {
         target.step()?;
     }
 
-    let regs = target.read_regs()?;
-    let ip = regs.rip;
+    let regs = target.main_thread()?.read_regs()?;
+    let ip = regs.ip();
     assert!(debuginfo
         .get_address_symbol_name(ip as usize)
         .as_deref()
@@ -74,7 +74,7 @@ fn read_locals() -> Result<(), Box<dyn std::error::Error>> {
                         unit,
                         frame_base,
                         None,
-                        get_linux_x86_64_reg(regs),
+                        get_reg_value(regs),
                     )?;
                     assert_eq!(res.len(), 1);
                     assert_eq!(res[0].bit_offset, None);
@@ -82,7 +82,7 @@ fn read_locals() -> Result<(), Box<dyn std::error::Error>> {
                     Some(match res[0].location {
                         gimli::Location::Register {
                             register: gimli::X86_64::RBP,
-                        } => regs.rbp,
+                        } => regs.bp().unwrap(),
                         ref loc => unimplemented!("{:?}", loc), // FIXME
                     })
                 } else {
@@ -104,7 +104,7 @@ fn read_locals() -> Result<(), Box<dyn std::error::Error>> {
                                 unit,
                                 expr.clone(),
                                 frame_base,
-                                get_linux_x86_64_reg(regs),
+                                get_reg_value(regs),
                             )?;
                             assert_eq!(res.len(), 1);
                             assert_eq!(res[0].bit_offset, None);
@@ -136,18 +136,11 @@ fn read_locals() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
-fn get_linux_x86_64_reg(
-    regs: libc::user_regs_struct,
+fn get_reg_value(
+    regs: impl headcrab::target::Registers,
 ) -> impl Fn(gimli::Register, gimli::ValueType) -> gimli::Value {
     move |reg, ty| {
-        let val = match reg {
-            gimli::X86_64::RAX => regs.rax,
-            gimli::X86_64::RBX => regs.rbx,
-            gimli::X86_64::RDI => regs.rdi,
-            gimli::X86_64::RBP => regs.rbp,
-            reg => unimplemented!("{:?}", reg), // FIXME
-        };
+        let val = regs.reg_for_dwarf(reg).unwrap();
         match ty {
             gimli::ValueType::Generic => gimli::Value::Generic(val),
             gimli::ValueType::U64 => gimli::Value::U64(val),

@@ -12,7 +12,7 @@ fn main() {
 mod example {
     use headcrab::{
         symbol::{DisassemblySource, RelocatedDwarf},
-        target::{AttachOptions, LinuxTarget, UnixTarget},
+        target::{AttachOptions, LinuxTarget, Registers, UnixTarget},
     };
 
     struct Context {
@@ -217,7 +217,7 @@ mod example {
                     context
                         .remote()?
                         .read()
-                        .read(&mut stack, regs.rsp as usize)
+                        .read(&mut stack, regs.sp() as usize)
                         .apply()?;
                 }
 
@@ -225,15 +225,15 @@ mod example {
                     Some("fp") | None => headcrab::symbol::unwind::frame_pointer_unwinder(
                         context.debuginfo(),
                         &stack[..],
-                        regs.rip as usize,
-                        regs.rsp as usize,
-                        regs.rbp as usize,
+                        regs.ip() as usize,
+                        regs.sp() as usize,
+                        regs.bp().unwrap() as usize,
                     )
                     .collect(),
                     Some("naive") => headcrab::symbol::unwind::naive_unwinder(
                         context.debuginfo(),
                         &stack[..],
-                        regs.rip as usize,
+                        regs.ip() as usize,
                     )
                     .collect(),
                     Some(sub) => Err(format!("Unknown `bt` subcommand `{}`", sub))?,
@@ -291,7 +291,7 @@ mod example {
                 }
             }
             Some("dis") | Some("disassemble") => {
-                let ip = context.remote()?.read_regs()?.rip;
+                let ip = context.remote()?.read_regs()?.ip();
                 let mut code = [0; 64];
                 unsafe {
                     context
@@ -304,8 +304,8 @@ mod example {
                 println!("{}", disassembly);
             }
             Some("locals") => {
-                let regs = context.remote()?.read_regs()?;
-                let func = regs.rip as usize;
+                let regs = context.remote()?.main_thread()?.read_regs()?;
+                let func = regs.ip() as usize;
                 let res = context.debuginfo().with_addr_frames(
                     func,
                     |func, mut frames: headcrab::symbol::FrameIter| {
@@ -350,7 +350,7 @@ mod example {
                                     unit,
                                     frame_base,
                                     None,
-                                    get_linux_x86_64_reg(regs),
+                                    get_reg_value(regs),
                                 )?;
                                 assert_eq!(res.len(), 1);
                                 assert_eq!(res[0].bit_offset, None);
@@ -358,7 +358,7 @@ mod example {
                                 Some(match res[0].location {
                                     gimli::Location::Register {
                                         register: gimli::X86_64::RBP,
-                                    } => regs.rbp,
+                                    } => regs.bp().unwrap(),
                                     ref loc => unimplemented!("{:?}", loc), // FIXME
                                 })
                             } else {
@@ -431,28 +431,11 @@ mod example {
         Ok(())
     }
 
-    fn get_linux_x86_64_reg(
-        regs: libc::user_regs_struct,
+    fn get_reg_value(
+        regs: impl headcrab::target::Registers,
     ) -> impl Fn(gimli::Register, gimli::ValueType) -> gimli::Value {
         move |reg, ty| {
-            let val = match reg {
-                gimli::X86_64::RAX => regs.rax,
-                gimli::X86_64::RBX => regs.rbx,
-                gimli::X86_64::RCX => regs.rcx,
-                gimli::X86_64::RDX => regs.rdx,
-                gimli::X86_64::RSI => regs.rsi,
-                gimli::X86_64::RDI => regs.rdi,
-                gimli::X86_64::RSP => regs.rsp,
-                gimli::X86_64::RBP => regs.rbp,
-                gimli::X86_64::R9 => regs.r9,
-                gimli::X86_64::R10 => regs.r10,
-                gimli::X86_64::R11 => regs.r11,
-                gimli::X86_64::R12 => regs.r12,
-                gimli::X86_64::R13 => regs.r13,
-                gimli::X86_64::R14 => regs.r14,
-                gimli::X86_64::R15 => regs.r15,
-                reg => unimplemented!("{:?}", reg), // FIXME
-            };
+            let val = regs.reg_for_dwarf(reg).unwrap();
             match ty {
                 gimli::ValueType::Generic => gimli::Value::Generic(val),
                 gimli::ValueType::U64 => gimli::Value::U64(val),
@@ -466,7 +449,7 @@ mod example {
         context: &Context,
         unit: &gimli::Unit<headcrab::symbol::Reader<'a>>,
         frame_base: Option<u64>,
-        regs: libc::user_regs_struct,
+        regs: impl headcrab::target::Registers,
         local: headcrab::symbol::Local,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let type_size = if let Some(type_) = local.type_() {
@@ -487,7 +470,7 @@ mod example {
                     unit,
                     expr.clone(),
                     frame_base,
-                    get_linux_x86_64_reg(regs),
+                    get_reg_value(regs),
                 )?;
                 assert_eq!(res.len(), 1);
                 assert_eq!(res[0].bit_offset, None);
