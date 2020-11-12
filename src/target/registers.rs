@@ -52,6 +52,119 @@ pub trait Registers: Debug {
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::Registers as RegistersX86_64;
 
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+mod x86_64 {
+    use gimli::Register;
+    use mach::structs::x86_thread_state64_t;
+
+    #[derive(Copy, Clone, Debug)]
+    pub struct Registers {
+        regs: x86_thread_state64_t,
+    }
+
+    impl From<x86_thread_state64_t> for Registers {
+        fn from(regs: x86_thread_state64_t) -> Registers {
+            Registers { regs }
+        }
+    }
+
+    impl Into<x86_thread_state64_t> for Registers {
+        fn into(self) -> x86_thread_state64_t {
+            self.regs
+        }
+    }
+
+    impl super::Registers for Registers {
+        fn ip(&self) -> u64 {
+            self.regs.__rip
+        }
+
+        fn sp(&self) -> u64 {
+            self.regs.__rsp
+        }
+
+        fn bp(&self) -> Option<u64> {
+            Some(self.regs.__rbp)
+        }
+
+        fn set_ip(&mut self, ip: u64) {
+            self.regs.__rip = ip;
+        }
+
+        fn set_bp(&mut self, bp: u64) -> Option<()> {
+            self.regs.__rbp = bp;
+            Some(())
+        }
+
+        fn set_sp(&mut self, sp: u64) {
+            self.regs.__rsp = sp;
+        }
+
+        fn set_reg_for_dwarf(&mut self, register: Register, val: u64) -> Option<()> {
+            use gimli::X86_64;
+            match register {
+                X86_64::RAX => self.regs.__rax = val,
+                X86_64::RBX => self.regs.__rbx = val,
+                X86_64::RCX => self.regs.__rcx = val,
+                X86_64::RDX => self.regs.__rdx = val,
+                X86_64::RSI => self.regs.__rsi = val,
+                X86_64::RDI => self.regs.__rdi = val,
+                X86_64::RSP => self.regs.__rsp = val,
+                X86_64::RBP => self.regs.__rbp = val,
+                X86_64::R8 => self.regs.__r8 = val,
+                X86_64::R9 => self.regs.__r9 = val,
+                X86_64::R10 => self.regs.__r10 = val,
+                X86_64::R11 => self.regs.__r11 = val,
+                X86_64::R12 => self.regs.__r12 = val,
+                X86_64::R13 => self.regs.__r13 = val,
+                X86_64::R14 => self.regs.__r14 = val,
+                X86_64::R15 => self.regs.__r15 = val,
+                X86_64::CS => self.regs.__cs = val,
+                X86_64::GS => self.regs.__gs = val,
+                X86_64::FS => self.regs.__fs = val,
+                X86_64::RFLAGS => self.regs.__rflags = val,
+                reg => unimplemented!("{:?}", reg), // FIXME
+            }
+            Some(())
+        }
+
+        fn dwarf_for_name(_name: &str) -> Option<Register> {
+            unimplemented!()
+        }
+
+        fn name_for_dwarf(register: Register) -> Option<&'static str> {
+            gimli::X86_64::register_name(register)
+        }
+
+        fn reg_for_dwarf(&self, register: Register) -> Option<u64> {
+            use gimli::X86_64;
+            match register {
+                X86_64::RAX => Some(self.regs.__rax),
+                X86_64::RBX => Some(self.regs.__rbx),
+                X86_64::RCX => Some(self.regs.__rcx),
+                X86_64::RDX => Some(self.regs.__rdx),
+                X86_64::RSI => Some(self.regs.__rsi),
+                X86_64::RDI => Some(self.regs.__rdi),
+                X86_64::RSP => Some(self.regs.__rsp),
+                X86_64::RBP => Some(self.regs.__rbp),
+                X86_64::R8 => Some(self.regs.__r8),
+                X86_64::R9 => Some(self.regs.__r9),
+                X86_64::R10 => Some(self.regs.__r10),
+                X86_64::R11 => Some(self.regs.__r11),
+                X86_64::R12 => Some(self.regs.__r12),
+                X86_64::R13 => Some(self.regs.__r13),
+                X86_64::R14 => Some(self.regs.__r14),
+                X86_64::R15 => Some(self.regs.__r15),
+                X86_64::CS => Some(self.regs.__cs),
+                X86_64::GS => Some(self.regs.__gs),
+                X86_64::FS => Some(self.regs.__fs),
+                X86_64::RFLAGS => Some(self.regs.__rflags),
+                reg => unimplemented!("{:?}", reg), // FIXME
+            }
+        }
+    }
+}
+
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod x86_64 {
     use gimli::Register;

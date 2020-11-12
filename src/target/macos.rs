@@ -2,11 +2,12 @@ mod readmem;
 mod vmmap;
 mod writemem;
 
-use crate::target::thread::Thread;
+use crate::target::{registers::Registers, thread::Thread};
 use libc::pid_t;
 use mach::{
     kern_return, mach_types, mach_types::ipc_space_t, message::mach_msg_type_number_t, port,
-    port::mach_port_name_t, port::mach_port_t, traps, traps::current_task, vm, vm_types::*,
+    port::mach_port_name_t, port::mach_port_t, structs::x86_thread_state64_t, thread_act,
+    thread_status, traps, traps::current_task, vm, vm_types::*,
 };
 use nix::{
     sys::signal::{self, Signal},
@@ -23,6 +24,9 @@ use std::{
     mem::{self, MaybeUninit},
     ptr,
 };
+
+#[cfg(target_arch = "x86_64")]
+use crate::target::registers::RegistersX86_64;
 
 pub use readmem::ReadMemory;
 pub use writemem::WriteMemory;
@@ -54,8 +58,38 @@ extern "C" {
     pub fn pthread_from_mach_thread_np(port: libc::c_uint) -> libc::pthread_t;
 }
 
-impl Thread for OSXThread {
+impl<Regs> Thread<Regs> for OSXThread
+where
+    Regs: Registers + From<x86_thread_state64_t> + Into<x86_thread_state64_t>,
+{
     type ThreadId = mach_port_t;
+
+    fn read_regs(&self) -> Result<Regs, Box<dyn std::error::Error>> {
+        let state = x86_thread_state64_t::new();
+        let state_count = x86_thread_state64_t::count();
+        let kret = unsafe {
+            thread_act::thread_get_state(
+                self.port,
+                thread_status::x86_THREAD_STATE64,
+                mem::transmute(&state),
+                mem::transmute(&state_count),
+            )
+        };
+
+        if kret == kern_return::KERN_SUCCESS {
+            Ok(Regs::from(state))
+        } else {
+            Err(format!(
+                "Failure to get thread's state: kern_return_t error {}",
+                kret
+            )
+            .into())
+        }
+    }
+
+    fn write_regs(&self, _regs: Regs) -> Result<(), Box<dyn std::error::Error>> {
+        unimplemented!()
+    }
 
     fn name(&self) -> Result<Option<String>, Box<dyn Error>> {
         if let Some(pt_id) = self.pthread_id {
@@ -81,6 +115,8 @@ impl Thread for OSXThread {
         self.port
     }
 }
+
+type BoxedMacOSThread = Box<dyn Thread<RegistersX86_64, ThreadId = mach_port_t>>;
 
 pub struct Target {
     /// Port for a target task
@@ -186,9 +222,7 @@ impl Target {
     }
 
     /// Returns the current snapshot view of this debuggee process threads.
-    pub fn threads(
-        &self,
-    ) -> Result<Vec<Box<dyn Thread<ThreadId = mach_port_t>>>, Box<dyn std::error::Error>> {
+    pub fn threads(&self) -> Result<Vec<BoxedMacOSThread>, Box<dyn std::error::Error>> {
         let mut threads: mach_types::thread_act_array_t = std::ptr::null_mut();
         let mut tcount: mach_msg_type_number_t = 0;
 
@@ -209,7 +243,7 @@ impl Target {
                     port,
                     pthread_id,
                     task_port,
-                }) as Box<dyn Thread<ThreadId = mach_port_t>>;
+                }) as BoxedMacOSThread;
 
                 osx_threads.push(thread);
             }
